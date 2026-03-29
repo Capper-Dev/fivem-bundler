@@ -4,12 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is **fivem-bundler**, a build-time compiler for FiveM Lua resources that bundles modular Lua code for use with ox_lib. It performs static analysis on Lua files, builds dependency graphs, and generates single-file bundles that inject modules into `package.preload`.
+This is **fivem-bundler**, a build-time compiler for FiveM Lua resources that bundles modular Lua code into single files using `package.preload`. It performs static analysis on Lua files, builds dependency graphs, and generates bundled output compatible with both standard `require()` and ox_lib's `lib.require()`.
 
 **Core Philosophy**:
-- Use `package.preload` to inject bundled modules
-- Let ox_lib's real `lib.require` handle loading (no emulation)
-- Perfect ox_lib compatibility by design
+- Use `package.preload` to inject bundled modules (works with Lua's built-in `require()`)
+- Compatible with ox_lib's `lib.require` when present (not required)
 - All `require()` calls must use string literals - no dynamic requires
 
 ## Common Commands
@@ -82,11 +81,11 @@ Generated bundles contain:
 3. **Entry File Execution** - Entry files executed directly in deterministic order
 
 **Why package.preload?**
-- ox_lib is loaded via fxmanifest.lua as shared_script
-- ox_lib's `lib.require` checks `package.preload` automatically
-- No need to emulate ox_lib's loader - we use the real one
-- Guarantees perfect compatibility and correct circular dependency handling
-- Future-proof against ox_lib updates
+- Lua's built-in `require()` checks `package.preload` automatically
+- ox_lib's `lib.require` also resolves from `package.preload` when present
+- No custom loader needed — works with or without ox_lib
+- Correct circular dependency handling (Lua handles this natively)
+- Future-proof and framework-agnostic
 
 ### Critical Invariants
 
@@ -99,8 +98,8 @@ Generated bundles contain:
 
 **Circular Dependency Detection** (`src/graph.ts`):
 - Validates for circular dependencies during build
-- Only warns (doesn't fail) - ox_lib will handle at runtime
-- Circular dependencies are supported (ox_lib handles them correctly)
+- Only warns (doesn't fail) - Lua handles circular deps at runtime
+- Circular dependencies are supported (Lua's `require()` handles them correctly)
 
 **Deterministic Builds** (`src/discovery.ts`):
 - Files are sorted alphabetically by relative path
@@ -199,7 +198,7 @@ All errors include file path, line number, and column number for precise debuggi
 - **NEVER replace package.preload with a custom loader**
 - All modules go in package.preload (no exceptions)
 - Entry files execute AFTER preload (order matters)
-- ox_lib handles all require semantics - don't emulate
+- Lua's require() handles all loading semantics - don't emulate
 
 ### When Modifying Discovery
 - Scans ALL .lua files (not just specific folders)
@@ -210,7 +209,7 @@ All errors include file path, line number, and column number for precise debuggi
 ### When Modifying Graph Building
 - Entry detection: files NOT required by others + NOT lazy
 - Circular dependency detection is for warnings only (not hard errors)
-- ox_lib handles circular dependencies at runtime correctly
+- Lua handles circular dependencies at runtime correctly
 
 ## Technology Stack
 

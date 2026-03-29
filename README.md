@@ -1,6 +1,6 @@
 # fivem-bundler
 
-A build-time compiler for FiveM Lua resources. Scans client/ and server/ directories, resolves `require()` and `lib.require()` calls via AST analysis, and outputs single-file bundles that inject all modules into `package.preload` — letting ox_lib's real loader handle everything at runtime.
+A build-time compiler for FiveM Lua resources. Scans client/ and server/ directories, resolves `require()` and `lib.require()` calls via AST analysis, and outputs single-file bundles that inject all modules into `package.preload`.
 
 ## Install
 
@@ -135,7 +135,7 @@ Each bundle file contains:
    ```
 2. **Entry file execution** — files not required by any other module are executed directly at the bottom, in deterministic order.
 
-ox_lib is loaded as a `shared_script` via `fxmanifest.lua`. Its `lib.require` checks `package.preload` automatically, so no loader emulation is needed. Circular dependencies are supported — ox_lib handles them at runtime.
+Lua's built-in `require()` checks `package.preload` automatically, so no custom loader is needed. If ox_lib is loaded, `lib.require()` also resolves from `package.preload`. Circular dependencies are supported — Lua (and ox_lib) handle them at runtime.
 
 ## Lazy Configuration
 
@@ -175,12 +175,16 @@ Patterns without a file extension are treated as folder patterns. CLI flags merg
 ## Requirements
 
 - **Node.js >= 18** (or Bun)
-- **ox_lib** loaded as `shared_script` in `fxmanifest.lua`:
-  ```lua
-  shared_script '@ox_lib/init.lua'
-  ```
 
-ox_lib must be present and loaded before the bundle executes. `lib.require` is provided by ox_lib — this tool does not polyfill it.
+### ox_lib (optional)
+
+ox_lib is **not required** — bundles use `package.preload`, which works with Lua's built-in `require()`. If your resource uses ox_lib, load it as usual:
+
+```lua
+shared_script '@ox_lib/init.lua'
+```
+
+Both `require()` and `lib.require()` resolve from `package.preload` automatically.
 
 ## Development
 
