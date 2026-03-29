@@ -1,4 +1,4 @@
-import { moduleIdToPath, pathToModuleId, isIgnored } from "./discovery.js";
+import { moduleIdToPath, pathToModuleId, isLazy } from "./discovery.js";
 import { extractRequires, wrapModule } from "./parser.js";
 import type {
 	DependencyGraph,
@@ -6,14 +6,14 @@ import type {
 	ParsedModule,
 	Runtime,
 	SourceFile,
-	IgnoreConfig,
+	LazyConfig,
 } from "./types.js";
 import { CircularDependencyError, ModuleResolutionError } from "./types.js";
 
 export function buildDependencyGraph(
 	files: SourceFile[],
 	runtime: Runtime,
-	ignoreConfig?: IgnoreConfig,
+	lazyConfig?: LazyConfig,
 ): DependencyGraph {
 	const fileMap = new Map<ModuleId, SourceFile>();
 
@@ -36,29 +36,41 @@ export function buildDependencyGraph(
 		throw new Error(`No Lua files found for ${runtime} runtime`);
 	}
 
-	const processedModuleIds = new Set<ModuleId>();
+	const seenPaths = new Set<string>();
 	const modules = new Map<ModuleId, ParsedModule>();
+	const aliasToModule = new Map<ModuleId, ModuleId>();
 
 	for (const [moduleId, file] of fileMap) {
-		if (processedModuleIds.has(file.absolutePath)) {
+		if (seenPaths.has(file.absolutePath)) {
 			continue;
 		}
-		processedModuleIds.add(file.absolutePath);
-
-		const dependencies = extractRequires(file);
-		const wrappedCode = wrapModule(moduleId, file.content);
+		seenPaths.add(file.absolutePath);
 
 		const isShared = file.relativePath.startsWith("shared/");
-		const primaryModuleId = isShared
-			? pathToModuleId(file.relativePath)
+		const unprefixedId = pathToModuleId(file.relativePath);
+		const prefixedId = isShared
+			? unprefixedId
 			: pathToModuleId(file.relativePath, runtime);
 
-		modules.set(primaryModuleId, {
-			id: primaryModuleId,
+		const dependencies = extractRequires(file);
+		const wrappedCode = wrapModule(unprefixedId, file.content);
+
+		modules.set(unprefixedId, {
+			id: unprefixedId,
 			source: file,
 			dependencies,
 			wrappedCode,
 		});
+
+		aliasToModule.set(unprefixedId, unprefixedId);
+		if (!isShared) {
+			aliasToModule.set(prefixedId, unprefixedId);
+		}
+	}
+
+	function resolveModule(depId: ModuleId): ModuleId | undefined {
+		if (modules.has(depId)) return depId;
+		return aliasToModule.get(depId);
 	}
 
 	for (const [moduleId, module] of modules) {
@@ -70,7 +82,7 @@ export function buildDependencyGraph(
 				continue;
 			}
 
-			if (!modules.has(depId)) {
+			if (!resolveModule(depId)) {
 				throw new ModuleResolutionError(
 					`Module not found`,
 					depId,
@@ -82,7 +94,7 @@ export function buildDependencyGraph(
 
 	for (const moduleId of modules.keys()) {
 		try {
-			detectCircularDependencies(modules, moduleId);
+			detectCircularDependencies(modules, moduleId, undefined, undefined, resolveModule);
 		} catch (error) {
 			if (error instanceof CircularDependencyError) {
 				console.warn(
@@ -98,7 +110,8 @@ export function buildDependencyGraph(
 	const requiredModules = new Set<ModuleId>();
 	for (const module of modules.values()) {
 		for (const depId of module.dependencies) {
-			requiredModules.add(depId);
+			const resolved = resolveModule(depId);
+			if (resolved) requiredModules.add(resolved);
 		}
 	}
 
@@ -108,7 +121,11 @@ export function buildDependencyGraph(
 			continue;
 		}
 
-		if (isIgnored(module.source.relativePath, runtime, ignoreConfig)) {
+		if (module.source.relativePath.startsWith("shared/")) {
+			continue;
+		}
+
+		if (isLazy(module.source.relativePath, runtime, lazyConfig)) {
 			continue;
 		}
 
@@ -122,7 +139,7 @@ export function buildDependencyGraph(
 			`⚠️  Warning: No entry points found for ${runtime} runtime`,
 		);
 		console.warn(
-			`   All files are either required by others or ignored`,
+			`   All files are either required by others or marked lazy`,
 		);
 	}
 
@@ -138,29 +155,32 @@ function detectCircularDependencies(
 	startId: ModuleId,
 	loading: Set<ModuleId> = new Set(),
 	loaded: Set<ModuleId> = new Set(),
+	resolve?: (id: ModuleId) => ModuleId | undefined,
 ): void {
-	if (loaded.has(startId)) {
+	const resolvedId = resolve ? resolve(startId) ?? startId : startId;
+
+	if (loaded.has(resolvedId)) {
 		return;
 	}
 
-	if (loading.has(startId)) {
-		const cycle = [...loading, startId];
+	if (loading.has(resolvedId)) {
+		const cycle = [...loading, resolvedId];
 		throw new CircularDependencyError("Circular dependency detected", cycle);
 	}
 
-	const module = modules.get(startId);
+	const module = modules.get(resolvedId);
 	if (!module) {
-		throw new Error(`Internal error: module ${startId} not found`);
+		return;
 	}
 
-	loading.add(startId);
+	loading.add(resolvedId);
 
 	for (const depId of module.dependencies) {
-		detectCircularDependencies(modules, depId, loading, loaded);
+		detectCircularDependencies(modules, depId, loading, loaded, resolve);
 	}
 
-	loading.delete(startId);
-	loaded.add(startId);
+	loading.delete(resolvedId);
+	loaded.add(resolvedId);
 }
 
 export function getModulesInDependencyOrder(
@@ -189,26 +209,25 @@ export function analyzeGraph(graph: DependencyGraph): {
 		depth: number,
 		visited: Set<ModuleId>,
 	): number {
-		if (visited.has(moduleId)) {
-			return depth;
-		}
+		if (visited.has(moduleId)) return depth;
 
 		visited.add(moduleId);
 		const module = graph.modules.get(moduleId);
-		if (!module) {
-			return depth;
-		}
+		if (!module) return depth;
 
 		let max = depth;
 		for (const depId of module.dependencies) {
-			const depDepth = calculateDepth(depId, depth + 1, new Set(visited));
-			max = Math.max(max, depDepth);
+			max = Math.max(max, calculateDepth(depId, depth + 1, visited));
 		}
+		visited.delete(moduleId);
 
 		return max;
 	}
 
-	maxDepth = calculateDepth("__main__", 0, new Set());
+	for (const entry of graph.entryPoints) {
+		const depth = calculateDepth(entry.id, 0, new Set());
+		maxDepth = Math.max(maxDepth, depth);
+	}
 
 	return {
 		totalModules,

@@ -22,7 +22,7 @@ export interface DependencyGraph {
 	runtime: Runtime;
 }
 
-export interface IgnoreConfig {
+export interface LazyConfig {
 	folders?: string[];
 	files?: string[];
 }
@@ -31,15 +31,13 @@ export interface BuildConfig {
 	resourceRoot: string;
 	outputDir: string;
 	debug?: boolean;
-	ignore?: IgnoreConfig;
+	lazy?: LazyConfig;
 }
 
 export interface BuildResult {
 	clientBundle: string;
 	serverBundle: string;
 	stats: {
-		clientModules: number;
-		serverModules: number;
 		buildTime: number;
 	};
 }

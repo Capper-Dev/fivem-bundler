@@ -29,9 +29,26 @@ fivem-bundler ./my-resource ./my-resource/dist
 
 # Use npx without installing
 npx fivem-bundler ./my-resource
+
+# Mark framework adapters as lazy (bundled but not auto-executed)
+fivem-bundler ./my-resource --lazy "server/frameworks/**"
+fivem-bundler ./my-resource --lazy "client/legacy.lua"
 ```
 
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--lazy <pattern>` | Mark matching files as lazy. Can be used multiple times. |
+| `--debug` | Enable debug output (stack traces on error) |
+| `--version`, `-v` | Show version number |
+| `--help`, `-h` | Show help message |
+
 ## Resource Structure
+
+The bundler supports two discovery modes, chosen automatically:
+
+### Directory mode (client/ and server/ folders exist)
 
 ```
 my-resource/
@@ -47,7 +64,30 @@ my-resource/
    └─ config.lua
 ```
 
-No fixed file layout is required. The compiler scans all `.lua` files recursively under `client/`, `server/`, and `shared/`.
+All `.lua` files under `client/`, `server/`, and `shared/` are discovered recursively. No fixed layout within those directories is required.
+
+### Manifest mode (no client/ or server/ folders)
+
+When `client/` and `server/` directories don't exist, the bundler reads `fxmanifest.lua` to determine which files belong to which runtime:
+
+```
+my-resource/
+├─ fxmanifest.lua
+├─ main_client.lua
+├─ main_server.lua
+├─ config.lua
+└─ modules/
+   └─ utils.lua
+```
+
+```lua
+-- fxmanifest.lua
+client_scripts { 'main_client.lua', 'modules/*.lua' }
+server_scripts { 'main_server.lua', 'modules/*.lua' }
+shared_script 'config.lua'
+```
+
+External resource scripts (prefixed with `@`) are automatically skipped.
 
 **Output:**
 
@@ -97,13 +137,40 @@ Each bundle file contains:
 
 ox_lib is loaded as a `shared_script` via `fxmanifest.lua`. Its `lib.require` checks `package.preload` automatically, so no loader emulation is needed. Circular dependencies are supported — ox_lib handles them at runtime.
 
-## Ignore Configuration
+## Lazy Configuration
 
-Certain files can be excluded from auto-execution (entry point detection) while still being available via `require()`. This is useful for framework-specific files that should only load on demand.
+Some files should be bundled (available via `require()`) but **not auto-executed** as entry points. These are called **lazy** modules — they only run when another module explicitly requires them. This is useful for framework adapters, optional features, or conditional code paths.
 
-By default, the CLI ignores `**/frameworks/**` directories. Custom ignore patterns can be configured via the programmatic API (`BuildConfig.ignore`).
+### Config file
 
-Ignored files are **bundled** (injected into `package.preload`) but **not auto-executed**. They only run if another module explicitly requires them.
+Place a `bundler.config.json` in your resource root:
+
+```json
+{
+  "outputDir": "dist",
+  "lazy": {
+    "folders": ["**/frameworks/**"],
+    "files": ["client/legacy.lua"]
+  }
+}
+```
+
+### CLI flags
+
+```bash
+fivem-bundler ./my-resource --lazy "server/frameworks/**"
+fivem-bundler ./my-resource --lazy "client/optional.lua" --lazy "server/adapters/**"
+```
+
+Patterns without a file extension are treated as folder patterns. CLI flags merge with config file values — they don't replace them.
+
+### What "lazy" means
+
+| Behavior | Normal files | Lazy files |
+|----------|-------------|------------|
+| Bundled into `package.preload` | Yes | Yes |
+| Auto-executed as entry point | Yes (if not required by others) | No |
+| Available via `require()` | Yes | Yes |
 
 ## Requirements
 
@@ -114,6 +181,24 @@ Ignored files are **bundled** (injected into `package.preload`) but **not auto-e
   ```
 
 ox_lib must be present and loaded before the bundle executes. `lib.require` is provided by ox_lib — this tool does not polyfill it.
+
+## Development
+
+```bash
+bun install
+bun run build        # Compile TypeScript
+bun test             # Run all tests (64 tests)
+bun run typecheck    # Type-check without emit
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run `bun test` — all tests must pass
+5. Run `bun run build` — must compile cleanly
+6. Open a pull request
 
 ## License
 

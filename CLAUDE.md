@@ -36,21 +36,28 @@ bun test                 # Run all tests
 ## Architecture
 
 ### Build Pipeline Flow
-1. **Discovery** (`src/discovery.ts`) - Scans ALL .lua files in client/ and server/ directories
-2. **Parsing** (`src/parser.ts`) - Uses luaparse to build AST and extract require() calls
-3. **Graph Building** (`src/graph.ts`) - Constructs dependency graphs, identifies entry points
-4. **Bundling** (`src/bundler.ts`) - Generates package.preload assignments and entry file execution
-5. **Compilation** (`src/compiler.ts`) - Orchestrates the entire pipeline
+1. **Mode Detection** (`src/compiler.ts`) - Auto-detects directory mode vs manifest mode
+2. **Discovery** (`src/discovery.ts`) - Scans client/server dirs, OR resolves patterns from fxmanifest.lua
+3. **Manifest Parsing** (`src/manifest.ts`) - Parses fxmanifest.lua to extract script directives (manifest mode only)
+4. **Parsing** (`src/parser.ts`) - Uses luaparse to build AST and extract require() calls. Preprocesses FiveM Lua extensions (`?.`, `?[`) before parsing.
+5. **Graph Building** (`src/graph.ts`) - Constructs dependency graphs, resolves module aliases, identifies entry points
+6. **Bundling** (`src/bundler.ts`) - Generates package.preload assignments and entry file execution
+7. **Compilation** (`src/compiler.ts`) - Orchestrates the entire pipeline
 
 `tsc` compiles `src/` to `dist/`, and the CLI entry point is `dist/cli.js`.
 
+### Discovery Modes
+- **Directory mode**: client/ and/or server/ directories exist → scans ALL .lua files recursively
+- **Manifest mode**: no client/server dirs → reads fxmanifest.lua for script patterns, resolves globs
+- Mode is auto-detected, no CLI flag needed
+
 ### Module System
 
-**Module Identity**: String-based identifiers matching ox_lib semantics
+**Module Identity**: String-based identifiers matching ox_lib semantics (unprefixed)
 - `modules/police/mdt.lua` → `"modules.police.mdt"`
 - `utils/helpers.lua` → `"utils.helpers"`
 - `prototype.lua` → `"prototype"`
-- `main.lua` → `"main"` (no special treatment)
+- Bundle output uses unprefixed IDs in package.preload for direct require() compatibility
 
 **Require Resolution**:
 - Both `require("module.name")` and `lib.require("module.name")` are supported
@@ -61,7 +68,7 @@ bun test                 # Run all tests
 **Entry Point Detection**:
 - Entry files = files NOT required by any other module
 - Multiple entry files are supported
-- Ignored files are excluded from entry point detection
+- Lazy files are excluded from entry point detection
 - Entry files execute AFTER all package.preload assignments
 
 ### Bundle Structure
@@ -84,9 +91,11 @@ Generated bundles contain:
 ### Critical Invariants
 
 **Static Analysis** (`src/parser.ts`):
+- Uses @coalaura/luaparse-glm for native FiveM CfxLua syntax support (`?.`, `+=`, backtick hashes, `/* */` comments)
 - Must fail on dynamic require calls (variables, concatenation, etc.)
 - Must fail on remote resource requires
 - Must extract both `require()` and `lib.require()` calls
+- Original FiveM syntax is preserved in bundle output (only preprocessing is for AST analysis)
 
 **Circular Dependency Detection** (`src/graph.ts`):
 - Validates for circular dependencies during build
@@ -104,22 +113,35 @@ Generated bundles contain:
 - Run AFTER all package.preload assignments
 - Preserves top-level RegisterNetEvent, AddEventHandler, etc.
 
-**Ignore Rules** (`src/discovery.ts`):
-- Files in ignored folders are still bundled (in package.preload)
+**Lazy Rules** (`src/discovery.ts`):
+- Files matching lazy patterns are still bundled (in package.preload)
 - But NOT auto-executed as entry points
 - Only run if explicitly required by another module
 
+**Shared Files**:
+- Shared files are ALWAYS preload-only (never entry points)
+- They typically contain `return` statements that would kill the chunk if auto-executed
+- Available via `require()` / `lib.require()` from both client and server
+
 ## Expected Resource Structure
 
+**Directory mode** (auto-detected when client/ or server/ exists):
 ```
 my-resource/
 ├─ client/
-│  └─ **/*.lua          # Any Lua files (flexible structure)
-└─ server/
-   └─ **/*.lua          # Any Lua files (flexible structure)
+│  └─ **/*.lua
+├─ server/
+│  └─ **/*.lua
+└─ shared/              # optional
+   └─ **/*.lua
 ```
 
-**No fixed structure required** - discovery scans ALL .lua files recursively.
+**Manifest mode** (auto-detected when no client/server dirs):
+```
+my-resource/
+├─ fxmanifest.lua       # client_script(s), server_script(s), shared_script(s)
+└─ **/*.lua             # any structure
+```
 
 Output:
 ```
@@ -128,25 +150,30 @@ dist/
 └─ server.lua           # Bundled server runtime (package.preload)
 ```
 
-## Ignore Configuration
+## Lazy Configuration
 
-Configure ignored files/folders in BuildConfig:
+Lazy modules are bundled into `package.preload` but NOT auto-executed as entry points. They only run when explicitly required by another module. Useful for framework adapters, optional features, or conditional code paths.
 
-```typescript
-const config: BuildConfig = {
-  resourceRoot: "./my-resource",
-  outputDir: "./dist",
-  ignore: {
-    folders: ["server/frameworks/**"],  // Glob patterns
-    files: ["client/legacy.lua"]
+### Config file (`bundler.config.json` in resource root)
+
+```json
+{
+  "outputDir": "dist",
+  "lazy": {
+    "folders": ["**/frameworks/**"],
+    "files": ["client/legacy.lua"]
   }
-};
+}
 ```
 
-Ignored files:
-- Are still bundled (available via require)
-- Are NOT auto-executed as entry points
-- Only run if another module requires them
+### CLI flags
+
+```bash
+fivem-bundler ./my-resource --lazy "server/frameworks/**"
+fivem-bundler ./my-resource --lazy "client/legacy.lua" --lazy "server/adapters/**"
+```
+
+CLI flags merge with config file values.
 
 ## Error Handling
 
@@ -178,10 +205,10 @@ All errors include file path, line number, and column number for precise debuggi
 - Scans ALL .lua files (not just specific folders)
 - File discovery must be deterministic for reproducible builds
 - glob patterns are platform-independent (handles both `/` and `\`)
-- Ignore patterns use minimatch for flexibility
+- Lazy patterns use minimatch for flexibility
 
 ### When Modifying Graph Building
-- Entry detection: files NOT required by others + NOT ignored
+- Entry detection: files NOT required by others + NOT lazy
 - Circular dependency detection is for warnings only (not hard errors)
 - ox_lib handles circular dependencies at runtime correctly
 
@@ -189,5 +216,6 @@ All errors include file path, line number, and column number for precise debuggi
 
 - **Runtime**: Bun (Node.js compatible)
 - **Language**: TypeScript (ESM modules)
-- **Parser**: luaparse (Lua 5.4 AST parser)
-- **File Matching**: glob
+- **Parser**: @coalaura/luaparse-glm (FiveM CfxLua-aware Lua parser)
+- **File Matching**: glob, minimatch
+- **Testing**: bun test (64 tests across 6 test files)

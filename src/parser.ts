@@ -1,6 +1,11 @@
-import * as luaparse from "luaparse";
+import { parse } from "@coalaura/luaparse-glm";
+import { walkAST } from "./ast.js";
 import type { ModuleId, SourceFile } from "./types.js";
 import { StaticAnalysisError } from "./types.js";
+
+function patchSafeNav(code: string): string {
+	return code.replace(/\)\?\./g, ").").replace(/\)\?\[/g, ")[");
+}
 
 export function extractRequires(source: SourceFile): ModuleId[] {
 	const requires: ModuleId[] = [];
@@ -8,13 +13,12 @@ export function extractRequires(source: SourceFile): ModuleId[] {
 	let ast: any;
 
 	try {
-		ast = luaparse.parse(source.content, {
+		ast = parse(patchSafeNav(source.content), {
 			wait: false,
 			comments: false,
 			scope: false,
 			locations: true,
 			ranges: false,
-			luaVersion: "5.3",
 		});
 	} catch (err: any) {
 		console.warn(
@@ -109,26 +113,6 @@ function extractModuleFromCall(node: any, source: SourceFile): ModuleId | null {
 	}
 
 	return moduleId;
-}
-
-function walkAST(node: any, visitor: (node: any) => void): void {
-	if (!node || typeof node !== "object") {
-		return;
-	}
-
-	visitor(node);
-
-	for (const key in node) {
-		const value = node[key];
-
-		if (Array.isArray(value)) {
-			for (const item of value) {
-				walkAST(item, visitor);
-			}
-		} else if (typeof value === "object" && value !== null) {
-			walkAST(value, visitor);
-		}
-	}
 }
 
 export function wrapModule(moduleId: ModuleId, content: string): string {
