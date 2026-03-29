@@ -1,0 +1,41 @@
+{
+  "name": "fivem-bundler",
+  "version": "1.0.0",
+  "description": "Build-time compiler for FiveM Lua resources with ox_lib require semantics",
+  "type": "module",
+  "bin": {
+    "fivem-bundler": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "tsc",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "luaparse": "^0.3.1",
+    "glob": "^13.0.0",
+    "minimatch": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/luaparse": "^0.2.11",
+    "typescript": "^5.8.0"
+  },
+  "keywords": [
+    "fivem",
+    "lua",
+    "bundler",
+    "ox_lib",
+    "compiler",
+    "fxserver"
+  ],
+  "license": "MIT"
+}
