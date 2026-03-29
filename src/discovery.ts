@@ -1,10 +1,10 @@
 import { readFile, access } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { glob } from "glob";
+import { glob } from "tinyglobby";
 import type { Runtime, SourceFile, LazyConfig } from "./types.js";
 import { minimatch } from "minimatch";
 
-const GLOB_OPTS = { absolute: true, nodir: true, windowsPathsNoEscape: true } as const;
+const GLOB_OPTS = { absolute: true, onlyFiles: true } as const;
 
 export async function discoverFiles(
 	resourceRoot: string,

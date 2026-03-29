@@ -21,8 +21,8 @@
   },
   "dependencies": {
     "@coalaura/luaparse-glm": "^1.0.6",
-    "glob": "^13.0.0",
-    "minimatch": "^10.0.0"
+    "minimatch": "^10.0.0",
+    "tinyglobby": "^0.2.15"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
